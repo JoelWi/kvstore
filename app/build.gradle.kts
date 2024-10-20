@@ -41,3 +41,16 @@ tasks.named<Test>("test") {
     // Use JUnit Platform for unit tests.
     useJUnitPlatform()
 }
+
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("--enable-preview")
+}
+
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-preview")
+}
+
+tasks.withType<JavaExec>().configureEach {
+    jvmArgs("--enable-preview")
+}
+
