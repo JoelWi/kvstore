@@ -6,9 +6,13 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import kvstore.Result.Ok;
@@ -58,7 +62,7 @@ sealed interface respDataType {
     };
 
     record respArray(String value) implements respDataType {
-    };
+    }
 
 }
 
@@ -98,6 +102,10 @@ public class App {
             default -> new simpleError("Invalid type: " + type);
         };
 
+        Supplier<respDataType> ping = () -> new simpleString("+PONG\r\n");
+
+        Map<String, Supplier<?>> functions = Map.of("PING", ping);
+
         try (var serverSocket = new ServerSocket(6379)) {
             System.out.println("Server started, waiting for connections...");
             while (true) {
@@ -118,6 +126,7 @@ public class App {
                                 var arrLen = Character.getNumericValue(buffer[1]);
                                 var items = new respDataType[arrLen];
 
+                                IntStream.range(0, arrLen);
                                 // starting point of first item
                                 var ptr = 4;
                                 for (int i = 0; i < arrLen; ++i) {
@@ -148,9 +157,43 @@ public class App {
                                     var os = ok.value();
 
                                     Result.of(() -> {
-                                        switch (validType) {
-                                            case true -> os.write("+OK\r\n".getBytes());
-                                            case false -> os.write("-INVALID TYPE\r\n".getBytes());
+                                        var command = (bulkString) items[0];
+                                        System.out.println("COMMAND: " + command.value());
+                                        if (functions.containsKey(command.value())) {
+                                            switch (items.length) {
+                                                case 1 -> {
+                                                    var pong = functions.get("PING").get();
+                                                    if (pong instanceof simpleString ss) {
+                                                        os.write(ss.value().getBytes());
+                                                    }
+                                                }
+                                                default -> {
+                                                    var commandArgs = Stream
+                                                            .of(items)
+                                                            .skip(1)
+                                                            .map(item -> switch (item) {
+                                                                case respInteger i -> String.valueOf(i.value());
+                                                                case simpleString ss -> ss.value();
+                                                                case simpleError se -> se.value();
+                                                                case bulkString bs -> bs.value();
+                                                                case respArray ra -> ra.value();
+                                                            })
+                                                            .reduce((s1, s2) -> s1 + " " + s2)
+                                                            .get();
+                                                    commandArgs = "+PONG \"" + commandArgs + "\"\r\n";
+
+                                                    os.write(commandArgs.getBytes());
+
+                                                }
+
+                                            }
+                                        } else {
+                                            System.out.println("invalid command");
+                                            switch (validType) {
+                                                case true -> os.write("+OK\r\n".getBytes());
+                                                case false -> os.write("-INVALID TYPE\r\n".getBytes());
+                                            }
+
                                         }
                                         return true;
                                     });
