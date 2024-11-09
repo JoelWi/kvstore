@@ -7,6 +7,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.function.BiFunction;
@@ -104,7 +105,14 @@ public class App {
 
         Supplier<respDataType> ping = () -> new simpleString("+PONG\r\n");
 
-        Map<String, Supplier<?>> functions = Map.of("PING", ping);
+        Map<String, String> store = new HashMap<>();
+
+        BiFunction<String, String, String> setData = (key, value) -> {
+            store.put(key, value);
+            return "+OK\r\n";
+        };
+
+        Function<String, String> getData = key -> store.containsKey(key) ? "+" + store.get(key) + "\r\n" : "_\r\n";
 
         try (var serverSocket = new ServerSocket(6379)) {
             System.out.println("Server started, waiting for connections...");
@@ -126,6 +134,17 @@ public class App {
                                 var arrLen = Character.getNumericValue(buffer[1]);
                                 var items = new respDataType[arrLen];
 
+                                // 1. start at 4
+                                // 2. validate type
+                                // 3. increment once
+                                // 4. length of value
+                                // 5. increment thrice
+                                // 6. stringify the data
+                                // 7. deserialise to the correct type
+                                // 8. add to items
+                                // 9. increment by the value of length and 2
+                                //
+                                // 4 -> (type) -> +1 -> (len) -> +3 + (len + 2)
                                 IntStream.range(0, arrLen);
                                 // starting point of first item
                                 var ptr = 4;
@@ -159,10 +178,10 @@ public class App {
                                     Result.of(() -> {
                                         var command = (bulkString) items[0];
                                         System.out.println("COMMAND: " + command.value());
-                                        if (functions.containsKey(command.value())) {
+                                        if (command.value().equals("PING")) {
                                             switch (items.length) {
                                                 case 1 -> {
-                                                    var pong = functions.get("PING").get();
+                                                    var pong = ping.get();
                                                     if (pong instanceof simpleString ss) {
                                                         os.write(ss.value().getBytes());
                                                     }
@@ -187,6 +206,26 @@ public class App {
                                                 }
 
                                             }
+                                        } else if (command.value().equals("SET")) {
+                                            var commandArgs = Stream
+                                                    .of(items)
+                                                    .skip(1)
+                                                    .map(item -> switch (item) {
+                                                        case respInteger i -> String.valueOf(i.value());
+                                                        case simpleString ss -> ss.value();
+                                                        case simpleError se -> se.value();
+                                                        case bulkString bs -> bs.value();
+                                                        case respArray ra -> ra.value();
+                                                    })
+                                                    .toList();
+                                            var res = setData.apply(commandArgs.get(0), commandArgs.get(1));
+                                            os.write(res.getBytes());
+
+                                        } else if (command.value().equals("GET")) {
+                                            var key = (bulkString) items[1];
+                                            var res = getData.apply(key.value());
+                                            os.write(res.getBytes());
+
                                         } else {
                                             System.out.println("invalid command");
                                             switch (validType) {
