@@ -23,6 +23,11 @@ import kvstore.respDataType.respInteger;
 import kvstore.respDataType.simpleError;
 import kvstore.respDataType.simpleString;
 
+@FunctionalInterface
+interface TriFunction<T, U, V, R> {
+    R apply(T t, U u, V v);
+}
+
 sealed interface Result<T> {
     record Ok<T>(T value) implements Result<T> {
     };
@@ -106,6 +111,7 @@ public class App {
         Supplier<respDataType> ping = () -> new simpleString("+PONG\r\n");
 
         Map<String, String> store = new HashMap<>();
+        Map<String, Map<String, String>> hashStore = new HashMap<>();
 
         BiFunction<String, String, String> setData = (key, value) -> {
             store.put(key, value);
@@ -113,6 +119,25 @@ public class App {
         };
 
         Function<String, String> getData = key -> store.containsKey(key) ? "+" + store.get(key) + "\r\n" : "_\r\n";
+
+        TriFunction<String, String, String, String> hsetData = (map, key, value) -> {
+            if (!hashStore.containsKey(map)) {
+                hashStore.put(map, new HashMap<>());
+            }
+            var selectedMap = hashStore.get(map);
+
+            selectedMap.put(key, value);
+            return "+OK\r\n";
+        };
+
+        BiFunction<String, String, String> hgetData = (map, key) -> {
+            if (!hashStore.containsKey(map)) {
+                return "_\r\n";
+            }
+
+            var selectedMap = hashStore.get(map);
+            return selectedMap.containsKey(key) ? "+" + selectedMap.get(key) + "\r\n" : "_\r\n";
+        };
 
         try (var serverSocket = new ServerSocket(6379)) {
             System.out.println("Server started, waiting for connections...");
@@ -226,6 +251,27 @@ public class App {
                                             var res = getData.apply(key.value());
                                             os.write(res.getBytes());
 
+                                        } else if (command.value().equals("HSET")) {
+                                            var commandArgs = Stream
+                                                    .of(items)
+                                                    .skip(1)
+                                                    .map(item -> switch (item) {
+                                                        case respInteger i -> String.valueOf(i.value());
+                                                        case simpleString ss -> ss.value();
+                                                        case simpleError se -> se.value();
+                                                        case bulkString bs -> bs.value();
+                                                        case respArray ra -> ra.value();
+                                                    })
+                                                    .toList();
+                                            var res = hsetData.apply(commandArgs.get(0), commandArgs.get(1),
+                                                    commandArgs.get(2));
+                                            os.write(res.getBytes());
+
+                                        } else if (command.value().equals("HGET")) {
+                                            var map = (bulkString) items[1];
+                                            var key = (bulkString) items[2];
+                                            var res = hgetData.apply(map.value(), key.value());
+                                            os.write(res.getBytes());
                                         } else {
                                             System.out.println("invalid command");
                                             switch (validType) {
