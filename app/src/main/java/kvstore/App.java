@@ -323,42 +323,10 @@ public class App {
 
         var app = new App();
 
-        var aof = Paths.get("aof");
-        if (!Files.exists(aof)) {
-            Files.createFile(aof);
-        } else {
-            var cmds = Files.readAllLines(aof);
-            var logs = new ArrayList<ByteArrayInputStream>();
-            var base = "";
-            var len = 0;
-            var iterations = 0;
-            for (int i = 0; i < cmds.size(); i++) {
-                var cmd = cmds.get(i);
-
-                if (len == 0 && cmd.charAt(0) != '*') {
-                    continue;
-                }
-
-                if (len == 0) {
-                    System.out.println("here");
-                    System.out.println(cmd);
-                    len = Character.getNumericValue(cmd.charAt(1));
-                    iterations = len * 2 + 1;
-                }
-
-                if (iterations != 0) {
-                    base += cmd + "\r\n";
-                    iterations--;
-                }
-
-                if (iterations == 0) {
-                    app.readInput(base.getBytes(), new Socket(), Paths.get(""));
-                    base = "";
-                    len = 0;
-                }
-
-            }
-        }
+        var aof = new Aof("aof");
+        var cmds = aof.setup();
+        var logs = aof.readAof(cmds);
+        logs.forEach(l -> app.readInput(l.getBytes(), new Socket(), Paths.get("")));
 
         try (var serverSocket = new ServerSocket(6379)) {
             System.out.println("Server started, waiting for connections...");
@@ -366,7 +334,7 @@ public class App {
                 try (var clientSocket = serverSocket.accept()) {
                     System.out.println("Client connection accepted!");
                     var is = clientSocket.getInputStream();
-                    app.clientInput(is, clientSocket, aof);
+                    app.clientInput(is, clientSocket, Paths.get(aof.filename));
                 } catch (IOException e) {
                     System.err.println("Error handling client connection: " + e.getMessage());
                 }
