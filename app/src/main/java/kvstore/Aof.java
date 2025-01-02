@@ -23,42 +23,35 @@ public class Aof {
     }
 
     public List<String> readAof(List<String> cmds) {
-        var logs = read(cmds, 0, new ArrayList<String>(), new StringBuilder(), 0, 0).invoke();
-
-        return logs;
+        return read(cmds, 0, new ArrayList<String>(), new StringBuilder(), 0).invoke();
     }
 
-    private TailCall<ArrayList<String>> read(List<String> cmds, int currentCmd, ArrayList<String> logs,
-            StringBuilder base, int cmdLen, int iterations) {
-        var cmd = cmds.get(currentCmd);
+    private TailCall<ArrayList<String>> read(List<String> cmds, int index, ArrayList<String> logs,
+            StringBuilder base, int iterations) {
+        var cmd = cmds.get(index);
 
-        if (cmdLen != 0 || cmd.charAt(0) == '*') {
-            if (cmdLen == 0) {
-                System.out.println("here");
-                System.out.println(cmd);
-                cmdLen = Character.getNumericValue(cmd.charAt(1));
-                iterations = cmdLen * 2 + 1;
+        if (cmd.charAt(0) == '*') {
+            iterations = Character.getNumericValue(cmd.charAt(1)) * 2 + 1;
+        }
+
+        switch (iterations) {
+            case 1 -> {
+                base.append(cmd).append("\r\n");
+                logs.add(base.toString());
+                base.setLength(0);
+                iterations = 0;
             }
-
-            if (iterations != 0) {
+            default -> {
                 base.append(cmd).append("\r\n");
                 iterations--;
             }
-
-            if (iterations == 0) {
-                logs.add(base.toString());
-                base.setLength(0);
-                cmdLen = 0;
-            }
         }
 
-        if (currentCmd == cmds.size() - 1) {
+        if (index == cmds.size() - 1) {
             return TailCalls.done(logs);
         }
 
-        final int lenCopy = cmdLen;
         final int iterCopy = iterations;
-
-        return TailCalls.call(() -> read(cmds, currentCmd + 1, logs, base, lenCopy, iterCopy));
+        return TailCalls.call(() -> read(cmds, index + 1, logs, base, iterCopy));
     }
 }
