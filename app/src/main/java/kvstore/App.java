@@ -70,8 +70,8 @@ public class App {
     Map<String, String> store = new HashMap<>();
     Map<String, Map<String, String>> hashStore = new HashMap<>();
 
-    BiFunction<String, String, String> setData = (key, value) -> {
-        store.put(key, value);
+    TriFunction<Map<String, String>, String, String, String> setData = (map, key, value) -> {
+        map.put(key, value);
         return "+OK\r\n";
     };
 
@@ -144,6 +144,41 @@ public class App {
         };
     }
 
+    String setCmd(RespDataType[] items, Map<String, String> map) {
+        var commandArgs = Stream
+                .of(items)
+                .skip(1)
+                .map(item -> switch (item) {
+                    case respInteger i -> String.valueOf(i.value());
+                    case simpleString ss -> ss.value();
+                    case simpleError se -> se.value();
+                    case bulkString bs -> bs.value();
+                    case respArray ra -> ra.value();
+                })
+                .toList();
+        return setData.apply(store, commandArgs.get(0), commandArgs.get(1));
+
+    }
+
+    String hsetCmd(RespDataType[] items, Map<String, Map<String, String>> map) {
+        var commandArgs = Stream
+                .of(items)
+                .skip(1)
+                .map(item -> switch (item) {
+                    case respInteger i -> String.valueOf(i.value());
+                    case simpleString ss -> ss.value();
+                    case simpleError se -> se.value();
+                    case bulkString bs -> bs.value();
+                    case respArray ra -> ra.value();
+                })
+                .toList();
+        var res = hsetData.apply(commandArgs.get(0), commandArgs.get(1),
+                commandArgs.get(2));
+
+        return res;
+
+    }
+
     void readInput(byte[] buffer, Socket clientSocket, Path aof) {
         var initialByte = (char) buffer[0];
         System.out.println(initialByte);
@@ -171,18 +206,7 @@ public class App {
                     os.write(res.getBytes());
                 }
             } else if (command.value().equals("SET")) {
-                var commandArgs = Stream
-                        .of(items)
-                        .skip(1)
-                        .map(item -> switch (item) {
-                            case respInteger i -> String.valueOf(i.value());
-                            case simpleString ss -> ss.value();
-                            case simpleError se -> se.value();
-                            case bulkString bs -> bs.value();
-                            case respArray ra -> ra.value();
-                        })
-                        .toList();
-                var res = setData.apply(commandArgs.get(0), commandArgs.get(1));
+                var res = setCmd(items, store);
                 Result.of(() -> Files.write(aof, usedBytes, StandardOpenOption.APPEND));
 
                 if (osRes instanceof Ok<OutputStream> ok) {
@@ -200,19 +224,7 @@ public class App {
                 }
 
             } else if (command.value().equals("HSET")) {
-                var commandArgs = Stream
-                        .of(items)
-                        .skip(1)
-                        .map(item -> switch (item) {
-                            case respInteger i -> String.valueOf(i.value());
-                            case simpleString ss -> ss.value();
-                            case simpleError se -> se.value();
-                            case bulkString bs -> bs.value();
-                            case respArray ra -> ra.value();
-                        })
-                        .toList();
-                var res = hsetData.apply(commandArgs.get(0), commandArgs.get(1),
-                        commandArgs.get(2));
+                var res = hsetCmd(items, hashStore);
                 Result.of(() -> Files.write(aof, usedBytes, StandardOpenOption.APPEND));
 
                 if (osRes instanceof Ok<OutputStream> ok) {
