@@ -17,7 +17,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -25,60 +24,14 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import kvstore.Result.Ok;
-import kvstore.respDataType.bulkString;
-import kvstore.respDataType.respArray;
-import kvstore.respDataType.respInteger;
-import kvstore.respDataType.simpleError;
-import kvstore.respDataType.simpleString;
+import kvstore.RespDataType.bulkString;
+import kvstore.RespDataType.respArray;
+import kvstore.RespDataType.respInteger;
+import kvstore.RespDataType.simpleError;
+import kvstore.RespDataType.simpleString;
 
-@FunctionalInterface
-interface TriFunction<T, U, V, R> {
-    R apply(T t, U u, V v);
-}
-
-sealed interface Result<T> {
-    record Ok<T>(T value) implements Result<T> {
-    };
-
-    record Err<T>(Throwable err) implements Result<T> {
-    };
-
-    static <T> Result<T> of(Callable<T> code) {
-        try {
-            return new Ok<T>(code.call());
-        } catch (Throwable throwable) {
-            return new Err<T>(throwable);
-        }
-    }
-
-    default <R> Result<R> map(Function<T, R> mapper) {
-        return switch (this) {
-            case Ok<T> ok -> Result.of(() -> mapper.apply(ok.value()));
-            case Err<T> err -> new Err<R>(err.err());
-        };
-    }
+record ByteBuffer(byte[] buffer, int bytesRead) {
 };
-
-record byteBuffer(byte[] buffer, int bytesRead) {
-};
-
-sealed interface respDataType {
-    record simpleString(String value) implements respDataType {
-    };
-
-    record simpleError(String value) implements respDataType {
-    };
-
-    record respInteger(int value) implements respDataType {
-    };
-
-    record bulkString(String value) implements respDataType {
-    };
-
-    record respArray(String value) implements respDataType {
-    }
-
-}
 
 public class App {
     static final char STRING = '+';
@@ -87,13 +40,10 @@ public class App {
     static final char BULK = '$';
     static final char ARRAY = '*';
 
-    record value(String typ, String str, int num, String bulk, value[] array) {
-    };
-
-    Function<InputStream, Result<byteBuffer>> readBytes = is -> Result.of(() -> {
+    Function<InputStream, Result<ByteBuffer>> readBytes = is -> Result.of(() -> {
         var buffer = new byte[1024];
         var bytesRead = is.read(buffer);
-        return new byteBuffer(buffer, bytesRead);
+        return new ByteBuffer(buffer, bytesRead);
     });
     Function<Socket, Result<OutputStream>> outputStream = s -> Result.of(() -> s.getOutputStream());
 
@@ -106,7 +56,7 @@ public class App {
         default -> false;
     };
 
-    BiFunction<Character, String, respDataType> deserialiseData = (type, data) -> switch (type) {
+    BiFunction<Character, String, RespDataType> deserialiseData = (type, data) -> switch (type) {
         case STRING -> new simpleString(data);
         case ERROR -> new simpleError(data);
         case INTEGER -> new respInteger(Integer.valueOf(data));
@@ -115,7 +65,7 @@ public class App {
         default -> new simpleError("Invalid type: " + type);
     };
 
-    Supplier<respDataType> ping = () -> new simpleString("+PONG\r\n");
+    Supplier<RespDataType> ping = () -> new simpleString("+PONG\r\n");
 
     Map<String, String> store = new HashMap<>();
     Map<String, Map<String, String>> hashStore = new HashMap<>();
@@ -146,46 +96,41 @@ public class App {
         return selectedMap.containsKey(key) ? "+" + selectedMap.get(key) + "\r\n" : "_\r\n";
     };
 
+    record BufferResult(RespDataType[] items, int ptr) {};
+
+    TailCall<BufferResult> readBuffer(int ptr, byte[] buffer, int arrLen, int index, RespDataType[] items) {
+        var type = (char) buffer[ptr];
+        boolean valid = isValidType.apply(type);
+        if (valid) {
+            ptr++;
+            var len = Character.getNumericValue(buffer[ptr]);
+            // skipping over \r\n
+            ptr += 3;
+            var rawData = new String(buffer, ptr, len);
+            var item = deserialiseData.apply(type, rawData);
+            items[index] = item;
+            // skipping over \r\n to next item
+            ptr += len + 2;
+        }
+
+        if (index == arrLen - 1) {
+            return TailCalls.done(new BufferResult(items, ptr));
+        }
+
+        var ptrCopy = ptr;
+
+        return TailCalls.call(() -> readBuffer(ptrCopy, buffer, arrLen, index + 1, items));
+    }
+
     void readInput(byte[] buffer, Socket clientSocket, Path aof) {
         var initialByte = (char) buffer[0];
         System.out.println(initialByte);
         boolean validType = isValidType.apply(initialByte);
         var arrLen = Character.getNumericValue(buffer[1]);
-        var items = new respDataType[arrLen];
 
-        // 1. start at 4
-        // 2. validate type
-        // 3. increment once
-        // 4. length of value
-        // 5. increment thrice
-        // 6. stringify the data
-        // 7. deserialise to the correct type
-        // 8. add to items
-        // 9. increment by the value of length and 2
-        //
-        // 4 -> (type) -> +1 -> (len) -> +3 + (len + 2)
-        IntStream.range(0, arrLen);
-        // starting point of first item
-        var ptr = 4;
-        for (int i = 0; i < arrLen; ++i) {
-            var type = (char) buffer[ptr];
-            boolean valid = isValidType.apply(type);
-            if (valid) {
-                ptr++;
-                var len = Character.getNumericValue(buffer[ptr]);
-                // skipping over \r\n
-                ptr += 3;
-                var rawData = new String(buffer, ptr, len);
-                var item = deserialiseData.apply(type, rawData);
-                items[i] = item;
-                // skipping over \r\n to next item
-                ptr += len + 2;
-            } else {
-                System.out.println("broke on: " + ptr);
-                System.out.println(type);
-                break;
-            }
-        }
+        var bufferRes = readBuffer(4, buffer, arrLen, 0, new RespDataType[arrLen]).invoke();
+        var items = bufferRes.items();
+        var ptr = bufferRes.ptr();
 
         var usedBytes = Arrays.copyOf(buffer, ptr);
 
@@ -308,8 +253,8 @@ public class App {
     void clientInput(InputStream is, Socket clientSocket, Path aof) {
         System.out.println("doing stuff");
         Stream.generate(() -> readBytes.apply(is))
-                .takeWhile(r -> r instanceof Ok<byteBuffer> ok && ok.value().bytesRead() != -1)
-                .map(r -> (Ok<byteBuffer>) r)
+                .takeWhile(r -> r instanceof Ok<ByteBuffer> ok && ok.value().bytesRead() != -1)
+                .map(r -> (Ok<ByteBuffer>) r)
                 .map(ok -> ok.value())
                 .filter(bb -> bb.bytesRead() > 6)
                 .forEach(bb -> {
