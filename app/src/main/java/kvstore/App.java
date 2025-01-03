@@ -65,7 +65,7 @@ public class App {
         default -> new simpleError("Invalid type: " + type);
     };
 
-    Supplier<RespDataType> ping = () -> new simpleString("+PONG\r\n");
+    Supplier<simpleString> ping = () -> new simpleString("+PONG\r\n");
 
     Map<String, String> store = new HashMap<>();
     Map<String, Map<String, String>> hashStore = new HashMap<>();
@@ -96,7 +96,8 @@ public class App {
         return selectedMap.containsKey(key) ? "+" + selectedMap.get(key) + "\r\n" : "_\r\n";
     };
 
-    record BufferResult(RespDataType[] items, int ptr) {};
+    record BufferResult(RespDataType[] items, int ptr) {
+    };
 
     TailCall<BufferResult> readBuffer(int ptr, byte[] buffer, int arrLen, int index, RespDataType[] items) {
         var type = (char) buffer[ptr];
@@ -122,6 +123,27 @@ public class App {
         return TailCalls.call(() -> readBuffer(ptrCopy, buffer, arrLen, index + 1, items));
     }
 
+    String pingCmd(RespDataType[] items) {
+        return switch (items.length) {
+            case 1 -> ping.get().value();
+            default -> {
+                var commandArgs = Stream
+                        .of(items)
+                        .skip(1)
+                        .map(item -> switch (item) {
+                            case respInteger i -> String.valueOf(i.value());
+                            case simpleString ss -> ss.value();
+                            case simpleError se -> se.value();
+                            case bulkString bs -> bs.value();
+                            case respArray ra -> ra.value();
+                        })
+                        .reduce((s1, s2) -> s1 + " " + s2)
+                        .get();
+                yield "+PONG \"" + commandArgs + "\"\r\n";
+            }
+        };
+    }
+
     void readInput(byte[] buffer, Socket clientSocket, Path aof) {
         var initialByte = (char) buffer[0];
         System.out.println(initialByte);
@@ -143,38 +165,10 @@ public class App {
             var command = (bulkString) items[0];
             System.out.println("COMMAND: " + command.value());
             if (command.value().equals("PING")) {
-                switch (items.length) {
-                    case 1 -> {
-                        var pong = ping.get();
-                        if (osRes instanceof Ok<OutputStream> ok) {
-                            var os = ok.value();
-                            if (pong instanceof simpleString ss) {
-                                os.write(ss.value().getBytes());
-                            }
-                        }
-                    }
-                    default -> {
-                        var commandArgs = Stream
-                                .of(items)
-                                .skip(1)
-                                .map(item -> switch (item) {
-                                    case respInteger i -> String.valueOf(i.value());
-                                    case simpleString ss -> ss.value();
-                                    case simpleError se -> se.value();
-                                    case bulkString bs -> bs.value();
-                                    case respArray ra -> ra.value();
-                                })
-                                .reduce((s1, s2) -> s1 + " " + s2)
-                                .get();
-                        commandArgs = "+PONG \"" + commandArgs + "\"\r\n";
-
-                        if (osRes instanceof Ok<OutputStream> ok) {
-                            var os = ok.value();
-                            os.write(commandArgs.getBytes());
-                        }
-
-                    }
-
+                var res = pingCmd(items);
+                if (osRes instanceof Ok<OutputStream> ok) {
+                    var os = ok.value();
+                    os.write(res.getBytes());
                 }
             } else if (command.value().equals("SET")) {
                 var commandArgs = Stream
